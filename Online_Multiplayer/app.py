@@ -1,98 +1,101 @@
-import pygame
 import socket
-import threading
-import pickle
-import sys
+import pygame
 
-# Game settings
-WIDTH, HEIGHT = 500, 500
+# Game configuration
+WIDTH, HEIGHT = 800, 600
 FPS = 60
+PADDLE_WIDTH, PADDLE_HEIGHT = 20, 100
+BALL_SIZE = 20
 
-# Network settings
-HOST = 'localhost'
+# Initialize Pygame
+pygame.init()
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Pong - Multiplayer")
+clock = pygame.time.Clock()
+
+# Colors
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+
+# Paddle and Ball
+player1_rect = pygame.Rect(30, HEIGHT//2 - PADDLE_HEIGHT//2, PADDLE_WIDTH, PADDLE_HEIGHT)
+player2_rect = pygame.Rect(WIDTH - 50, HEIGHT//2 - PADDLE_HEIGHT//2, PADDLE_WIDTH, PADDLE_HEIGHT)
+ball_rect = pygame.Rect(WIDTH//2 - BALL_SIZE//2, HEIGHT//2 - BALL_SIZE//2, BALL_SIZE, BALL_SIZE)
+ball_speed = [5, 5]
+
+# Socket configuration
+SERVER = 'localhost'
 PORT = 5555
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-# Player colors and size
-PLAYER_SIZE = 50
-COLORS = [(0, 0, 255), (255, 0, 0)]
+def game_loop():
+    try:
+        client_socket.connect((SERVER, PORT))
+        print("Connected to server")
 
-# Networking functions
-def create_server():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind((HOST, PORT))
-    server.listen()
-    print("Waiting for a player to join...")
-    conn, addr = server.accept()
-    print("Player connected from", addr)
-    return conn
+        # Game loop
+        player1_y, player2_y = HEIGHT//2 - PADDLE_HEIGHT//2, HEIGHT//2 - PADDLE_HEIGHT//2
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    client_socket.close()
+                    pygame.quit()
+                    return
 
-def connect_to_server():
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.connect((HOST, PORT))
-    return client
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_w] and player1_rect.top > 0:
+                player1_rect.y -= 5
+            if keys[pygame.K_s] and player1_rect.bottom < HEIGHT:
+                player1_rect.y += 5
 
-# Thread to receive position from network
-def receive_data(sock, player_rect):
-    while True:
-        try:
-            data = sock.recv(1024)
-            if not data:
+            if keys[pygame.K_UP] and player2_rect.top > 0:
+                player2_rect.y -= 5
+            if keys[pygame.K_DOWN] and player2_rect.bottom < HEIGHT:
+                player2_rect.y += 5
+
+            # Send player positions to server
+            try:
+                client_socket.sendall(str(player1_rect.y).encode())
+                client_socket.sendall(str(player2_rect.y).encode())
+            except Exception as e:
+                print(f"Error sending data to server: {e}")
                 break
-            pos = pickle.loads(data)
-            player_rect.x, player_rect.y = pos
-        except:
-            break
 
-# Main game function
-def main(is_server):
-    pygame.init()
-    win = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("Multiplayer Game")
-    clock = pygame.time.Clock()
+            # Receive updated positions from server
+            try:
+                player1_y = int(client_socket.recv(1024).decode())
+                player2_y = int(client_socket.recv(1024).decode())
+            except Exception as e:
+                print(f"Error receiving data from server: {e}")
+                break
 
-    # Initial positions
-    rects = [pygame.Rect(100, 100, PLAYER_SIZE, PLAYER_SIZE),
-             pygame.Rect(300, 300, PLAYER_SIZE, PLAYER_SIZE)]
+            # Move the ball
+            ball_rect.x += ball_speed[0]
+            ball_rect.y += ball_speed[1]
 
-    # Networking setup
-    sock = create_server() if is_server else connect_to_server()
-    player_id = 0 if is_server else 1
-    threading.Thread(target=receive_data, args=(sock, rects[1 - player_id]), daemon=True).start()
+            if ball_rect.top <= 0 or ball_rect.bottom >= HEIGHT:
+                ball_speed[1] = -ball_speed[1]
 
-    # Game loop
-    run = True
-    while run:
-        clock.tick(FPS)
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                run = False
-                pygame.quit()
-                sock.close()
-                sys.exit()
+            if ball_rect.colliderect(player1_rect) or ball_rect.colliderect(player2_rect):
+                ball_speed[0] = -ball_speed[0]
 
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_LEFT]:
-            rects[player_id].x -= 5
-        if keys[pygame.K_RIGHT]:
-            rects[player_id].x += 5
-        if keys[pygame.K_UP]:
-            rects[player_id].y -= 5
-        if keys[pygame.K_DOWN]:
-            rects[player_id].y += 5
+            if ball_rect.left <= 0 or ball_rect.right >= WIDTH:
+                ball_rect.center = (WIDTH//2, HEIGHT//2)
+                ball_speed[0] = -ball_speed[0]
 
-        # Send current player position
-        try:
-            sock.send(pickle.dumps((rects[player_id].x, rects[player_id].y)))
-        except:
-            pass
+            # Draw everything
+            screen.fill(BLACK)
+            pygame.draw.rect(screen, WHITE, player1_rect)
+            pygame.draw.rect(screen, WHITE, player2_rect)
+            pygame.draw.ellipse(screen, WHITE, ball_rect)
 
-        # Draw
-        win.fill((30, 30, 30))
-        pygame.draw.rect(win, COLORS[player_id], rects[player_id])
-        pygame.draw.rect(win, COLORS[1 - player_id], rects[1 - player_id])
-        pygame.display.update()
+            pygame.display.flip()
+            clock.tick(FPS)
+
+    except Exception as e:
+        print(f"Error in game loop: {e}")
+        client_socket.close()
+        pygame.quit()
 
 if __name__ == "__main__":
-    choice = input("Host or Join? (h/j): ").lower()
-    is_server = choice == 'h'
-    main(is_server)
+    game_loop()
